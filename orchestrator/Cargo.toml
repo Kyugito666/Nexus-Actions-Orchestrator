@@ -20,6 +20,8 @@ log = "0.4"
 clap = { version = "4.4", features = ["derive"] }
 dirs = "5.0"
 colored = "2.1"
+# Add to [dependencies] section
+tempfile = "3.8"
 
 [build-dependencies]
 cc = "1.0"
