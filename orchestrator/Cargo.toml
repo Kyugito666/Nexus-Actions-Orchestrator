@@ -1,1 +1,31 @@
+[package]
+name = "nexus-orchestrator"
+version = "2.0.0"
+edition = "2021"
+authors = ["Nexus Team"]
+description = "Multi-account GitHub Actions orchestrator for Nexus Network"
 
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+tokio = { version = "1.35", features = ["full"] }
+crossterm = "0.27"
+tui = "0.19"
+chrono = "0.4"
+anyhow = "1.0"
+thiserror = "1.0"
+env_logger = "0.11"
+log = "0.4"
+clap = { version = "4.4", features = ["derive"] }
+dirs = "5.0"
+colored = "2.1"
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
