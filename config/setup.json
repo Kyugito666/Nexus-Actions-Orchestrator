@@ -1,1 +1,8 @@
-
+{
+  "main_repo_owner": "your_github_username",
+  "main_repo_name": "nexus-runner",
+  "billing_warning_threshold": 118.0,
+  "billing_critical_threshold": 119.5,
+  "workflow_check_interval_minutes": 30,
+  "max_parallel_nodes": 20
+}
