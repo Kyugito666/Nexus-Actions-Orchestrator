@@ -6,7 +6,9 @@ mod nexus;
 mod monitor;
 mod utils;
 mod ui;
+mod orchestration;
 
+use orchestration::{Deployer, Rotator};
 use anyhow::Result;
 use log::{info, error};
 use std::env;
