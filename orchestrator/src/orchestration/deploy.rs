@@ -1,8 +1,10 @@
-// src/orchestration/deploy.rs - Deployment orchestration
-use anyhow::Result;
+// Update imports at top of src/orchestration/deploy.rs
+use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use log::info;
-use crate::{core::*, github::*, nexus::*};
+use crate::core::{account, state, StateManager};
+use crate::github::{GitHubClient, SecretsManager, WorkflowController};
+use crate::nexus::NexusConfig;
 
 pub struct Deployer {
     config_dir: PathBuf,
