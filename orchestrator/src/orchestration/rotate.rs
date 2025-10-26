@@ -1,8 +1,9 @@
-// src/orchestration/rotate.rs - Account rotation logic
-use anyhow::Result;
+// Update imports at top of src/orchestration/rotate.rs
+use anyhow::{Result, Context};
 use std::path::PathBuf;
 use log::{info, warn};
-use crate::{core::*, github::*};
+use crate::core::{account, billing, proxy, state, StateManager};
+use crate::github::{fork, GitHubClient};
 
 pub struct Rotator {
     config_dir: PathBuf,
