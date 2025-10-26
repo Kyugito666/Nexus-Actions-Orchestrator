@@ -1,1 +1,40 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
 
+# Config & Cache
+config/cache/
+config/*.txt
+config/setup.json
+!config/.gitkeep
+
+# Logs
+logs/*.log
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Build artifacts
+cpp/*.o
+cpp/*.obj
+*.so
+*.dll
+*.dylib
