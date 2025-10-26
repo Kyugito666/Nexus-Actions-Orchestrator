@@ -259,4 +259,18 @@ fn test_proxies_command() -> Result<()> {
     let cache_dir = config_dir.join("cache");
     
     let mut proxy_mgr = ProxyManager::new(&cache_dir);
-    proxy_mgr.load_cache(
+proxy_mgr.load_cache()?;
+    
+    display::print_info("Testing all proxy connections...");
+    
+    let failed = proxy_mgr.validate_all()?;
+    
+    if failed.is_empty() {
+        display::print_success("All proxies are working!");
+    } else {
+        display::print_warning(&format!("{} proxies failed", failed.len()));
+    }
+    
+    display::pause();
+    Ok(())
+}
