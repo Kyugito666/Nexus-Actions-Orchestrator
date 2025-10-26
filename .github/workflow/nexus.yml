@@ -1,1 +1,395 @@
+name: Nexus 24/7 Multi-Node Runner
 
+on:
+  workflow_dispatch:
+    inputs:
+      force_restart:
+        description: 'Force restart all nodes'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 */4 * * *'  # Auto-trigger every 4 hours
+
+env:
+  MAX_ITERATIONS: 100
+  RESTART_DELAY: 10
+  NODE_TIMEOUT: 5h
+
+concurrency:
+  group: nexus-${{ github.ref }}-${{ github.run_number }}
+  cancel-in-progress: false
+
+jobs:
+  setup-matrix:
+    name: 🔧 Setup Node Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+      total: ${{ steps.parse.outputs.total }}
+      timestamp: ${{ steps.parse.outputs.timestamp }}
+    steps:
+      - name: Parse Node Configuration
+        id: parse
+        run: |
+          set -euo pipefail
+          
+          echo "════════════════════════════════════════════════"
+          echo "🔍 PARSING NEXUS CONFIGURATION"
+          echo "════════════════════════════════════════════════"
+          
+          # Validate secrets exist
+          if [ -z "${NEXUS_NODE_IDS:-}" ]; then
+            echo "❌ CRITICAL: NEXUS_NODE_IDS secret not set!"
+            echo ""
+            echo "📋 SETUP INSTRUCTIONS:"
+            echo "1. Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "2. Add secret: NEXUS_NODE_IDS"
+            echo "3. Format: one node ID per line (newline-separated)"
+            echo ""
+            exit 1
+          fi
+          
+          if [ -z "${NEXUS_WALLETS:-}" ]; then
+            echo "❌ CRITICAL: NEXUS_WALLETS secret not set!"
+            exit 1
+          fi
+          
+          # Parse node IDs
+          mapfile -t NODE_IDS < <(echo "$NEXUS_NODE_IDS")
+          mapfile -t WALLETS < <(echo "$NEXUS_WALLETS")
+          
+          NODE_COUNT=${#NODE_IDS[@]}
+          WALLET_COUNT=${#WALLETS[@]}
+          
+          echo "✅ Loaded $NODE_COUNT node IDs"
+          echo "✅ Loaded $WALLET_COUNT wallets"
+          
+          if [ "$NODE_COUNT" -ne "$WALLET_COUNT" ]; then
+            echo "❌ ERROR: Node IDs ($NODE_COUNT) and Wallets ($WALLET_COUNT) count mismatch!"
+            exit 1
+          fi
+          
+          if [ "$NODE_COUNT" -eq 0 ]; then
+            echo "❌ ERROR: No nodes configured!"
+            exit 1
+          fi
+          
+          # Build JSON matrix
+          MATRIX_ITEMS=""
+          for i in $(seq 0 $((NODE_COUNT - 1))); do
+            NODE_ID="${NODE_IDS[$i]}"
+            WALLET="${WALLETS[$i]}"
+            
+            if [ -z "$NODE_ID" ] || [ -z "$WALLET" ]; then
+              echo "⚠️  Skipping empty entry at index $i"
+              continue
+            fi
+            
+            ITEM=$(cat <<EOF
+          {
+            "index": $((i + 1)),
+            "node_id": "$NODE_ID",
+            "wallet": "$WALLET"
+          }
+          EOF
+          )
+            
+            if [ -n "$MATRIX_ITEMS" ]; then
+              MATRIX_ITEMS="$MATRIX_ITEMS,"
+            fi
+            MATRIX_ITEMS="$MATRIX_ITEMS$ITEM"
+          done
+          
+          MATRIX=$(cat <<EOF
+          {
+            "include": [$MATRIX_ITEMS]
+          }
+          EOF
+          )
+          
+          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          
+          echo "total=$NODE_COUNT" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> "$GITHUB_OUTPUT"
+          
+          echo ""
+          echo "════════════════════════════════════════════════"
+          echo "✅ Matrix setup complete: $NODE_COUNT nodes"
+          echo "════════════════════════════════════════════════"
+        env:
+          NEXUS_NODE_IDS: ${{ secrets.NEXUS_NODE_IDS }}
+          NEXUS_WALLETS: ${{ secrets.NEXUS_WALLETS }}
+
+      - name: Validate Matrix
+        run: |
+          echo "════════════════════════════════════════════════"
+          echo "📊 MATRIX VALIDATION"
+          echo "════════════════════════════════════════════════"
+          
+          MATRIX='${{ steps.parse.outputs.matrix }}'
+          TOTAL='${{ steps.parse.outputs.total }}'
+          
+          echo "$MATRIX" | jq '.'
+          
+          echo ""
+          echo "🔢 Total Nodes: $TOTAL"
+          echo "⏰ Timestamp: ${{ steps.parse.outputs.timestamp }}"
+          echo ""
+          
+          NODE_COUNT=$(echo "$MATRIX" | jq '.include | length')
+          
+          if [ "$NODE_COUNT" -ne "$TOTAL" ]; then
+            echo "❌ ERROR: Matrix length ($NODE_COUNT) != total ($TOTAL)"
+            exit 1
+          fi
+          
+          for i in $(seq 0 $((NODE_COUNT - 1))); do
+            INDEX=$(echo "$MATRIX" | jq -r ".include[$i].index")
+            NODE_PREVIEW=$(echo "$MATRIX" | jq -r ".include[$i].node_id" | head -c 10)
+            WALLET_PREVIEW=$(echo "$MATRIX" | jq -r ".include[$i].wallet" | head -c 10)
+            
+            if [ -z "$INDEX" ] || [ "$INDEX" == "null" ]; then
+              echo "❌ ERROR: Node $i missing index"
+              exit 1
+            fi
+            
+            echo "  ✓ Node #$INDEX: node=${NODE_PREVIEW}... wallet=${WALLET_PREVIEW}..."
+          done
+          
+          echo ""
+          echo "✅ All nodes validated"
+          echo "════════════════════════════════════════════════"
+
+  run-nodes:
+    name: 🚀 Node #${{ matrix.index }}
+    needs: setup-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+    strategy:
+      max-parallel: 20    # GitHub free tier limit
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+    
+    steps:
+      - name: 🖥️ System Info
+        run: |
+          echo "════════════════════════════════════════════════"
+          echo "🚀 NEXUS NODE STARTUP"
+          echo "════════════════════════════════════════════════"
+          echo "📍 Node Index  : ${{ matrix.index }} / ${{ needs.setup-matrix.outputs.total }}"
+          echo "⏰ Started at  : ${{ needs.setup-matrix.outputs.timestamp }}"
+          echo "🔑 Node ID     : ${NODE_ID:0:10}...${NODE_ID: -6}"
+          echo "💰 Wallet      : ${WALLET:0:10}...${WALLET: -6}"
+          echo "🖥️ Runner      : $(hostname)"
+          echo "🌐 Public IP   : $(curl -s ifconfig.me || echo 'N/A')"
+          echo "💾 Disk Space  : $(df -h / | awk 'NR==2 {print $4}') available"
+          echo "🧠 Memory      : $(free -h | awk 'NR==2 {print $7}') available"
+          echo "════════════════════════════════════════════════"
+        env:
+          NODE_ID: ${{ matrix.node_id }}
+          WALLET: ${{ matrix.wallet }}
+
+      - name: 📦 Install Nexus CLI
+        run: |
+          set -euo pipefail
+          
+          echo "📥 Downloading Nexus CLI..."
+          
+          DOWNLOAD_URL="https://cli.nexus.xyz/install.sh"
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -fsSL "$DOWNLOAD_URL" -o install.sh; then
+              echo "✅ Download successful"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️ Download failed, retry $RETRY_COUNT/$MAX_RETRIES in 5s..."
+                sleep 5
+              else
+                echo "❌ Download failed after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
+          
+          chmod +x install.sh
+          
+          echo "🔧 Installing Nexus CLI (non-interactive)..."
+          NONINTERACTIVE=1 ./install.sh
+          
+          rm -f install.sh
+          
+          # Source profile to get nexus-cli in PATH
+          if [ -f "$HOME/.profile" ]; then
+            source "$HOME/.profile"
+          fi
+          
+          # Verify installation
+          if command -v nexus-cli &> /dev/null; then
+            echo "✅ Nexus CLI installed successfully"
+            nexus-cli --version 2>/dev/null || echo "📦 Version: latest"
+          else
+            echo "❌ Installation verification failed"
+            exit 1
+          fi
+
+      - name: 🚀 Run Node with Auto-Restart Loop
+        run: |
+          set -euo pipefail
+          
+          echo "🎯 Starting Nexus Node #${{ matrix.index }}..."
+          echo ""
+          
+          # Cleanup function
+          cleanup() {
+            echo ""
+            echo "═══════════════════════════════════════════════"
+            echo "⚠️ SHUTDOWN SIGNAL RECEIVED"
+            echo "═══════════════════════════════════════════════"
+            echo "⏰ Time: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "🛑 Stopping node gracefully..."
+            
+            pkill -TERM -f nexus-cli 2>/dev/null || true
+            sleep 5
+            pkill -KILL -f nexus-cli 2>/dev/null || true
+            
+            echo "✅ Node stopped"
+            echo "═══════════════════════════════════════════════"
+            exit 0
+          }
+          
+          trap cleanup SIGINT SIGTERM SIGHUP
+          
+          # Main loop variables
+          RESTART_COUNT=0
+          TOTAL_RUNTIME=0
+          NODE_ID="${{ matrix.node_id }}"
+          WALLET="${{ matrix.wallet }}"
+          
+          # Source environment
+          if [ -f "$HOME/.profile" ]; then
+            source "$HOME/.profile"
+          fi
+          
+          # Main restart loop
+          while [ $RESTART_COUNT -lt $MAX_ITERATIONS ]; do
+            echo ""
+            echo "╔═══════════════════════════════════════════════╗"
+            printf "║ ITERATION #%-3d of %-3d                        ║\n" $((RESTART_COUNT + 1)) "$MAX_ITERATIONS"
+            echo "╚═══════════════════════════════════════════════╝"
+            echo "⏰ Timestamp     : $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "📊 Total Runtime : $((TOTAL_RUNTIME / 3600))h $((TOTAL_RUNTIME % 3600 / 60))m"
+            echo "🔑 Node ID       : ${NODE_ID:0:10}...${NODE_ID: -6}"
+            echo "💰 Wallet        : ${WALLET:0:10}...${WALLET: -6}"
+            echo "───────────────────────────────────────────────"
+            
+            START_TIME=$(date +%s)
+            
+            # Register user (idempotent)
+            echo "📝 Registering wallet..."
+            nexus-cli register-user --wallet-address "$WALLET" 2>&1 | head -n 5 || {
+              echo "⚠️ Registration response (continuing anyway)"
+            }
+            
+            sleep 2
+            
+            # Start node with timeout
+            echo "▶️ Starting nexus-cli (timeout: $NODE_TIMEOUT)..."
+            echo ""
+            
+            timeout $NODE_TIMEOUT nexus-cli start --node-id "$NODE_ID" --headless 2>&1 | while IFS= read -r line; do
+              echo "[Node #${{ matrix.index }}] $line"
+            done || {
+              EXIT_CODE=$?
+              END_TIME=$(date +%s)
+              ITERATION_RUNTIME=$((END_TIME - START_TIME))
+              TOTAL_RUNTIME=$((TOTAL_RUNTIME + ITERATION_RUNTIME))
+              
+              echo ""
+              echo "───────────────────────────────────────────────"
+              echo "⚠️ Node stopped with exit code: $EXIT_CODE"
+              echo "⏱️ Iteration runtime: $((ITERATION_RUNTIME / 60))m $((ITERATION_RUNTIME % 60))s"
+              
+              case $EXIT_CODE in
+                124)
+                  echo "⏱️ Timeout reached (expected for periodic restart)"
+                  ;;
+                0)
+                  echo "✅ Clean exit"
+                  ;;
+                *)
+                  echo "❌ Unexpected exit. Waiting 30s before retry..."
+                  sleep 30
+                  ;;
+              esac
+            }
+            
+            ((RESTART_COUNT++))
+            
+            if [ $RESTART_COUNT -lt $MAX_ITERATIONS ]; then
+              echo ""
+              echo "⏳ Cooldown period: $RESTART_DELAY seconds..."
+              sleep $RESTART_DELAY
+            fi
+          done
+          
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          echo "🛑 MAX RESTART LIMIT REACHED ($MAX_ITERATIONS)"
+          echo "📊 Total Runtime: $((TOTAL_RUNTIME / 3600))h $((TOTAL_RUNTIME % 3600 / 60))m"
+          echo "═══════════════════════════════════════════════"
+        env:
+          MAX_ITERATIONS: ${{ env.MAX_ITERATIONS }}
+          RESTART_DELAY: ${{ env.RESTART_DELAY }}
+          NODE_TIMEOUT: ${{ env.NODE_TIMEOUT }}
+
+  monitor:
+    name: 📊 Health Monitor
+    needs: [setup-matrix, run-nodes]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Report
+        run: |
+          echo "╔═══════════════════════════════════════════════╗"
+          echo "║      NEXUS NODES HEALTH REPORT                ║"
+          echo "╚═══════════════════════════════════════════════╝"
+          echo ""
+          echo "📊 Workflow Summary:"
+          echo "───────────────────────────────────────────────"
+          echo "🔢 Total Nodes : ${{ needs.setup-matrix.outputs.total }}"
+          echo "📅 Started at  : ${{ needs.setup-matrix.outputs.timestamp }}"
+          echo "⏰ Finished at : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "📈 Job Results:"
+          echo "───────────────────────────────────────────────"
+          echo "✅ Success    : ${{ needs.run-nodes.result == 'success' }}"
+          echo "❌ Failure    : ${{ needs.run-nodes.result == 'failure' }}"
+          echo "⚠️ Cancelled  : ${{ needs.run-nodes.result == 'cancelled' }}"
+          echo "⏭️ Skipped    : ${{ needs.run-nodes.result == 'skipped' }}"
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          
+          if [ "${{ needs.run-nodes.result }}" == "success" ]; then
+            echo "✅ All nodes completed their cycle successfully!"
+            exit 0
+          elif [ "${{ needs.run-nodes.result }}" == "failure" ]; then
+            echo "❌ Some nodes failed. Check individual job logs."
+            echo "💡 Common issues:"
+            echo "   • Invalid node IDs or wallets"
+            echo "   • Network connectivity problems"
+            echo "   • Nexus CLI installation failures"
+            exit 1
+          elif [ "${{ needs.run-nodes.result }}" == "cancelled" ]; then
+            echo "⚠️ Workflow was cancelled manually."
+            exit 0
+          else
+            echo "ℹ️ Workflow status: ${{ needs.run-nodes.result }}"
+            exit 0
+          fi
