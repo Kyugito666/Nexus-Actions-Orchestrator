@@ -3,6 +3,7 @@
 use anyhow::Result;
 use crate::ui::{display, input};
 use std::path::PathBuf;
+use crate::orchestration::{Deployer, Rotator};
 
 pub fn run_menu() -> Result<()> {
     loop {
@@ -107,6 +108,18 @@ fn menu_deployment() -> Result<()> {
         
         match choice {
             0 => return Ok(()),
+            1 => {
+                let deployer = Deployer::new(PathBuf::from("config"));
+                deployer.deploy_main_workflow()?;
+                display::print_success("Workflow deployed");
+                display::pause();
+            }
+            3 => {
+                let deployer = Deployer::new(PathBuf::from("config"));
+                deployer.set_all_secrets()?;
+                display::print_success("Secrets set");
+                display::pause();
+            }
             _ => {
                 display::print_info("Feature under development");
                 display::pause();
@@ -114,7 +127,6 @@ fn menu_deployment() -> Result<()> {
         }
     }
 }
-
 fn menu_monitoring() -> Result<()> {
     loop {
         display::clear_screen();
