@@ -8,6 +8,8 @@ Cargo.lock
 config/cache/
 config/*.txt
 config/setup.json
+config/alerts.json
+!config/*.example
 !config/.gitkeep
 
 # Logs
@@ -18,6 +20,8 @@ logs/*.log
 .DS_Store
 Thumbs.db
 desktop.ini
+.AppleDouble
+.LSOverride
 
 # IDE
 .vscode/
@@ -25,12 +29,14 @@ desktop.ini
 *.swp
 *.swo
 *~
+*.sublime-*
 
 # Temporary
 *.tmp
 *.temp
 *.bak
 *.backup
+*.old
 
 # Build artifacts
 cpp/*.o
@@ -38,3 +44,13 @@ cpp/*.obj
 *.so
 *.dll
 *.dylib
+*.a
+*.lib
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# macOS
+*.dSYM/
